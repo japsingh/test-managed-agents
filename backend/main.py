@@ -8,6 +8,9 @@ Endpoints:
   GET  /api/metrics          – aggregate metrics
   POST /api/chat             – proxy a chat request to Claude
   GET  /api/events           – SSE stream of new spans (text/event-stream)
+
+OTLP receiver (compatible with Claude Code):
+  POST /v1/traces            – OTLP JSON trace ingest
 """
 from __future__ import annotations
 
@@ -22,6 +25,7 @@ load_dotenv()
 
 from telemetry import span_store  # noqa: E402 – must follow load_dotenv
 from claude_client import chat  # noqa: E402
+from otlp_receiver import parse_otlp_json  # noqa: E402
 
 app = Flask(__name__, static_folder=None)
 
@@ -35,6 +39,7 @@ def _cors(response):
     return response
 
 @app.route("/api/<path:p>", methods=["OPTIONS"])
+@app.route("/v1/<path:p>", methods=["OPTIONS"])
 def _options(p):
     return "", 204
 
@@ -82,7 +87,29 @@ def post_chat():
         return jsonify({"error": str(exc)}), 502
 
 
-# ── SSE stream ────────────────────────────────────────────────────────────────
+# ── OTLP receiver ─────────────────────────────────────────────────────────────
+
+@app.post("/v1/traces")
+def otlp_traces():
+    """
+    Accepts OTLP JSON traces from Claude Code (or any OTLP-compatible source).
+    Configure Claude Code with:
+      OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:8000
+      OTEL_EXPORTER_OTLP_PROTOCOL=http/json
+      CLAUDE_CODE_ENABLE_TELEMETRY=1
+    """
+    body = request.get_json(force=True, silent=True)
+    if not body:
+        return jsonify({"error": "invalid JSON"}), 400
+
+    spans = parse_otlp_json(body)
+    for span in spans:
+        span_store.add(span)
+
+    return jsonify({"partialSuccess": {}}), 200
+
+
+# ── SSE stream ─────────────────────────────────────────────────────────────────
 
 def _sse_stream():
     """Generator that yields SSE-formatted messages as new spans arrive."""

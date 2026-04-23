@@ -18,6 +18,15 @@ function StatusBadge({ status }) {
   );
 }
 
+function SourceBadge({ source }) {
+  const label = source === 'claude-code' ? 'claude code' : 'chat';
+  return (
+    <span className={`badge ${source === 'claude-code' ? 'badge-source-cc' : 'badge-source-chat'}`}>
+      {label}
+    </span>
+  );
+}
+
 // ── Metrics bar ────────────────────────────────────────────────────────────
 
 function MetricsBar({ metrics }) {
@@ -68,6 +77,7 @@ function TraceList({ traces, selectedId, onSelect }) {
               <span>↑{t.input_tokens} ↓{t.output_tokens}</span>
             )}
             {t.model && <span className="model-tag">{t.model}</span>}
+            <SourceBadge source={t.source} />
           </div>
         </div>
       ))}

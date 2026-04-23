@@ -95,6 +95,7 @@ class SpanStore:
                 "model": root["attributes"].get("gen_ai.request.model"),
                 "input_tokens": root["attributes"].get("gen_ai.usage.input_tokens"),
                 "output_tokens": root["attributes"].get("gen_ai.usage.output_tokens"),
+                "source": root.get("source", "chat"),
             })
         result.sort(key=lambda x: x["start_time"], reverse=True)
         return result
