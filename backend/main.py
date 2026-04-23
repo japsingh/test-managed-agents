@@ -29,6 +29,7 @@ load_dotenv()
 from telemetry import span_store  # noqa: E402
 from claude_client import chat    # noqa: E402
 from otlp_receiver import parse_otlp_json  # noqa: E402
+from api_proxy import proxy_request  # noqa: E402
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 
@@ -75,6 +76,23 @@ def _cors(response):
 @app.route("/v1/<path:p>",  methods=["OPTIONS"])
 def _options(p):
     return "", 204
+
+
+# ── Anthropic API proxy ───────────────────────────────────────────────────────
+# Set ANTHROPIC_BASE_URL=http://localhost:8000 in Claude Code to route all
+# API calls through here. Each call gets a telemetry span automatically.
+
+@app.route("/v1/<path:path>", methods=["GET", "POST", "PUT", "DELETE"])
+def anthropic_proxy(path: str):
+    # /v1/traces is our own OTLP endpoint — don't proxy it
+    if path == "traces":
+        return otlp_traces()
+    try:
+        body, status, headers = proxy_request(f"v1/{path}", request)
+        return body, status, dict(headers)
+    except Exception as exc:
+        log.error("Proxy error: %s", exc)
+        return jsonify({"error": str(exc)}), 502
 
 
 # ── REST endpoints ────────────────────────────────────────────────────────────
@@ -219,8 +237,9 @@ def serve_frontend(path: str = ""):
 
 if __name__ == "__main__":
     log.info("Starting Claude OTEL Monitor on http://0.0.0.0:8000")
-    log.info("OTLP receiver ready at POST http://localhost:8000/v1/traces")
-    log.info("Debug log at GET  http://localhost:8000/debug/requests")
+    log.info("API proxy ready   — set ANTHROPIC_BASE_URL=http://localhost:8000")
+    log.info("OTLP receiver     — POST http://localhost:8000/v1/traces")
+    log.info("Debug log         — GET  http://localhost:8000/debug/requests")
     app.run(host="0.0.0.0", port=8000, threaded=True)
 
 
