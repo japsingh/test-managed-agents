@@ -160,18 +160,26 @@ def post_chat():
 @app.post("/v1/traces")
 def otlp_traces():
     """
-    Accepts OTLP/HTTP JSON traces.
-    If protobuf arrives instead, logs a clear message so the user knows
-    to set OTEL_EXPORTER_OTLP_PROTOCOL=http/json.
+    Accepts OTLP traces in JSON or protobuf format on port 8000.
+    Dedicated receivers on 4317 (gRPC) and 4318 (HTTP/protobuf) are preferred.
     """
     ct = request.content_type or ""
 
     if "protobuf" in ct or "octet-stream" in ct:
-        log.warning(
-            "Received protobuf on /v1/traces — set "
-            "OTEL_EXPORTER_OTLP_PROTOCOL=http/json and retry"
-        )
-        return jsonify({"error": "protobuf not supported, use http/json"}), 415
+        try:
+            from opentelemetry.proto.collector.trace.v1 import trace_service_pb2
+            from otlp_proto_parser import parse_resource_spans
+            req = trace_service_pb2.ExportTraceServiceRequest()
+            req.ParseFromString(request.get_data())
+            spans = parse_resource_spans(req.resource_spans)
+            log.info("HTTP/protobuf /v1/traces (port 8000) → %d span(s)", len(spans))
+            for span in spans:
+                span_store.add(span)
+            resp = trace_service_pb2.ExportTraceServiceResponse().SerializeToString()
+            return resp, 200, {"Content-Type": "application/x-protobuf"}
+        except ImportError:
+            log.warning("Received protobuf but opentelemetry-proto not installed")
+            return jsonify({"error": "install opentelemetry-proto to handle protobuf"}), 415
 
     body = request.get_json(force=True, silent=True)
     if not body:
@@ -180,7 +188,7 @@ def otlp_traces():
         return jsonify({"error": "invalid JSON body"}), 400
 
     spans = parse_otlp_json(body)
-    log.info("OTLP /v1/traces → %d span(s) ingested", len(spans))
+    log.info("OTLP JSON /v1/traces → %d span(s) ingested", len(spans))
     for span in spans:
         span_store.add(span)
 
@@ -236,10 +244,18 @@ def serve_frontend(path: str = ""):
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    log.info("Starting Claude OTEL Monitor on http://0.0.0.0:8000")
-    log.info("API proxy ready   — set ANTHROPIC_BASE_URL=http://localhost:8000")
-    log.info("OTLP receiver     — POST http://localhost:8000/v1/traces")
-    log.info("Debug log         — GET  http://localhost:8000/debug/requests")
+    import grpc_receiver
+    import http_proto_receiver
+
+    grpc_ok  = grpc_receiver.start(port=4317, span_store=span_store)
+    proto_ok = http_proto_receiver.start(port=4318, span_store=span_store)
+
+    log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    log.info("  Dashboard        →  http://localhost:3000")
+    log.info("  Flask API        →  http://localhost:8000")
+    log.info("  gRPC  OTLP       →  localhost:4317  (%s)", "✓" if grpc_ok  else "✗ install grpcio opentelemetry-proto")
+    log.info("  HTTP/proto OTLP  →  localhost:4318  (%s)", "✓" if proto_ok else "✗ install opentelemetry-proto")
+    log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     app.run(host="0.0.0.0", port=8000, threaded=True)
 
 
